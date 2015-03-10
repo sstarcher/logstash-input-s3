@@ -1,7 +1,7 @@
 Gem::Specification.new do |s|
 
   s.name            = 'logstash-input-s3'
-  s.version         = '0.1.5'
+  s.version         = '0.1.8'
   s.licenses        = ['Apache License (2.0)']
   s.summary         = "Stream events from files from a S3 bucket."
   s.description     = "This gem is a logstash plugin required to be installed on top of the Logstash core pipeline using $LS_HOME/bin/plugin install gemname. This gem is not a stand-alone program"
@@ -22,10 +22,10 @@ Gem::Specification.new do |s|
   # Gem dependencies
   s.add_runtime_dependency "logstash-core", '>= 1.4.0', '< 2.0.0'
   s.add_runtime_dependency 'logstash-mixin-aws'
-  s.add_runtime_dependency 'logstash-codec-line'
-  s.add_runtime_dependency 'aws-sdk'
   s.add_runtime_dependency 'stud', '~> 0.0.18'
 
   s.add_development_dependency 'logstash-devutils'
+  s.add_development_dependency 'simplecov'
+  s.add_development_dependency 'coveralls'
 end
 

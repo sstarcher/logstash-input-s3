@@ -71,7 +71,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   public
   def register
     require "digest/md5"
-    require "aws-sdk-core"
+    require "aws-sdk-resources"
 
     @region = get_region
 
@@ -83,8 +83,9 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
     unless @backup_to_bucket.nil?
       @backup_bucket = s3.bucket(@backup_to_bucket)
-      unless @backup_bucket.exists?
+      begin
         s3.create_bucket(@backup_to_bucket)
+      rescue Aws::S3::Errors::BucketAlreadyExists
       end
     end
 
@@ -104,13 +105,13 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   def list_new_files
     objects = {}
 
-    @s3bucket.objects(options = {:prefix => @prefix}).each do |log|
+    @s3bucket.objects(:prefix => @prefix).each do |log|
       @logger.debug("S3 input: Found key", :key => log.key)
 
       unless ignore_filename?(log.key)
         if sincedb.newer?(log.last_modified)
           objects[log.key] = log.last_modified
-          @logger.debug("S3 input: Adding to objects[]", :key => log.key)
+          @logger.debug("S3 input: Adding to ryans objects[]", :key => log.key)
         end
       end
     end
@@ -121,7 +122,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   def backup_to_bucket(object, key)
     unless @backup_to_bucket.nil?
       backup_key = "#{@backup_add_prefix}#{key}"
-      @backup_bucket.object(backup_key).copy_from(options = {:copy_source => "#{object.bucket_name}/#{object.key}"})
+      @backup_bucket.object(backup_key).copy_from(:copy_source => "#{object.bucket_name}/#{object.key}")
       if @delete
         object.delete()
       end
@@ -299,7 +300,6 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     @logger.debug("S3 input: Download remove file", :remote_key => remote_object.key, :local_filename => local_filename)
     File.open(local_filename, 'wb') do |s3file|
         s3.get_object({ :bucket => remote_object.bucket_name, :key => remote_object.key }, :target => s3file)
-      end
     end
   end
 
@@ -345,13 +345,13 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     end
 
     if @credentials
-      s3 = AWS::S3.Resource.new(
+      s3 = Aws::S3::Resource.new(
         :access_key_id => @access_key_id,
         :secret_access_key => @secret_access_key,
         :region => @region
       )
     else
-      s3 = AWS::S3.Resource.new(aws_options_hash)
+      s3 = Aws::S3::Resource.new(aws_options_hash)
     end
   end
 

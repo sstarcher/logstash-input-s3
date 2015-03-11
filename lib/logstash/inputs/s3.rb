@@ -162,6 +162,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     # So all IO stuff: decompression, reading need to be done in the actual
     # input and send as bytes to the codecs.
     read_file(filename) do |line|
+      puts "Line: #{line}"
       @codec.decode(line) do |event|
         # We are making an assumption concerning cloudfront
         # log format, the user will use the plain or the line codec
@@ -190,7 +191,11 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   private
   def event_is_metadata?(event)
     line = event['message']
-    version_metadata?(line) || fields_metadata?(line)
+    unless line.nil?
+      version_metadata?(line) || fields_metadata?(line)
+    else
+      false
+    end
   end
 
   private

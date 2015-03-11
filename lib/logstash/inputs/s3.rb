@@ -111,7 +111,8 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
       unless ignore_filename?(log.key)
         if sincedb.newer?(log.last_modified)
           objects[log.key] = log.last_modified
-          @logger.debug("S3 input: Adding to ryans objects[]", :key => log.key)
+          @logger.debug("S3 input: Adding to objects[]", :key => log.key)
+          @logger.debug("objects[] legth is: ", :length => objects.length)
         end
       end
     end
@@ -289,7 +290,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
     process_local_log(queue, filename)
 
-    backup_to_bucket(object, key)
+    backup_to_bucket(object)
     backup_to_dir(filename)
 
     delete_file_from_bucket(object)

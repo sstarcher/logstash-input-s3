@@ -84,8 +84,9 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     unless @backup_to_bucket.nil?
       @backup_bucket = s3.bucket(@backup_to_bucket)
       begin
+        s3.client.head_bucket({ :bucket => @backup_to_bucket})
+      rescue Aws::S3::Errors::NoSuchBucket
         s3.create_bucket({ :bucket => @backup_to_bucket})
-      rescue Aws::S3::Errors::BucketAlreadyExists
       end
     end
 

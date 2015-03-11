@@ -128,7 +128,7 @@ describe LogStash::Inputs::S3 do
         config.register
 
         s3object = Aws::S3::Object.new('mybucket', 'testkey')
-        expect_any_instance_of(Aws::S3::Object).to receive(:copy_from).with(:copy_source => "mybucket/backup-testkey")
+        expect_any_instance_of(Aws::S3::Object).to receive(:copy_from).with(:copy_source => "mybucket/testkey")
         expect(s3object).to_not receive(:delete)
 
         config.backup_to_bucket(s3object)

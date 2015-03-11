@@ -112,7 +112,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
         if sincedb.newer?(log.last_modified)
           objects[log.key] = log.last_modified
           @logger.debug("S3 input: Adding to objects[]", :key => log.key)
-          @logger.debug("objects[] legth is: ", :length => objects.length)
+          @logger.debug("objects[] length is: ", :length => objects.length)
         end
       end
     end
@@ -123,7 +123,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   def backup_to_bucket(object)
     unless @backup_to_bucket.nil?
       backup_key = "#{@backup_add_prefix}#{object.key}"
-      @backup_bucket.object(backup_key).copy_from(:copy_source => "#{object.bucket_name}/#{backup_key}")
+      @backup_bucket.object(backup_key).copy_from(:copy_source => "#{object.bucket_name}/#{object.key}")
       if @delete
         object.delete()
       end
@@ -298,9 +298,9 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
   private
   def download_remote_file(remote_object, local_filename)
-    @logger.debug("S3 input: Download remove file", :remote_key => remote_object.key, :local_filename => local_filename)
+    @logger.debug("S3 input: Download remote file", :remote_key => remote_object.key, :local_filename => local_filename)
     File.open(local_filename, 'wb') do |s3file|
-        s3.get_object({ :bucket => remote_object.bucket_name, :key => remote_object.key }, :target => s3file)
+        remote_object.get(:response_target => s3file)
     end
   end
 

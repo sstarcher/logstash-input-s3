@@ -2,13 +2,13 @@
 require "logstash/devutils/rspec/spec_helper"
 require "logstash/inputs/s3"
 require "logstash/errors"
-require "aws-sdk"
+require "aws-sdk-resources"
 require "stud/temporary"
 require_relative "../support/helpers"
 
 describe LogStash::Inputs::S3 do
   before do
-    AWS.stub!
+    Aws.config[:stub_responses] = true
     Thread.abort_on_exception = true
   end
   let(:day) { 3600 * 24 }
@@ -21,7 +21,7 @@ describe LogStash::Inputs::S3 do
   }
 
   describe "#list_new_files" do
-    before { allow_any_instance_of(AWS::S3::ObjectCollection).to receive(:with_prefix).with(nil) { objects_list } }
+    before { allow_any_instance_of(Aws::S3::Bucket).to receive(:objects) { objects_list } }
 
     let!(:present_object) { double(:key => 'this-should-be-present', :last_modified => Time.now) }
     let(:objects_list) {
@@ -51,7 +51,7 @@ describe LogStash::Inputs::S3 do
           present_object
         ]
 
-        allow_any_instance_of(AWS::S3::ObjectCollection).to receive(:with_prefix).with(nil) { objects_list }
+        allow_any_instance_of(Aws::S3::Bucket).to receive(:objects) { objects_list }
 
         config = LogStash::Inputs::S3.new(settings.merge({ 'backup_add_prefix' => 'mybackup',
                                                            'backup_to_bucket' => settings['bucket']}))
@@ -77,7 +77,7 @@ describe LogStash::Inputs::S3 do
           present_object
         ]
 
-        allow_any_instance_of(AWS::S3::ObjectCollection).to receive(:with_prefix).with(prefix) { objects_list }
+        allow_any_instance_of(Aws::S3::Bucket).to receive(:objects).with(:prefix => prefix) { objects_list }
 
         config = LogStash::Inputs::S3.new(settings.merge({ 'prefix' => prefix }))
         config.register
@@ -91,7 +91,7 @@ describe LogStash::Inputs::S3 do
         double(:key => 'TWO_DAYS_AGO', :last_modified => Time.now - 2 * day)
       ]
 
-      allow_any_instance_of(AWS::S3::ObjectCollection).to receive(:with_prefix).with(nil) { objects }
+      allow_any_instance_of(Aws::S3::Bucket).to receive(:objects) { objects }
 
 
       config = LogStash::Inputs::S3.new(settings)
@@ -104,20 +104,22 @@ describe LogStash::Inputs::S3 do
         config = LogStash::Inputs::S3.new(settings.merge({ "backup_to_bucket" => "mybackup"}))
         config.register
 
-        s3object = double()
-        expect(s3object).to receive(:copy_to).with('test-file', :bucket => an_instance_of(AWS::S3::Bucket))
+        s3object = Aws::S3::Object.new('mybucket', 'testkey')
+        expect_any_instance_of(Aws::S3::Object).to receive(:copy_from).with(:copy_source => "mybucket/testkey")
+        expect(s3object).to_not receive(:delete)
 
-        config.backup_to_bucket(s3object, 'test-file')
+        config.backup_to_bucket(s3object)
       end
 
-      it 'should move to another s3 bucket when deleting the original file' do
+      it 'should copy to another s3 bucket when deleting the original file' do
         config = LogStash::Inputs::S3.new(settings.merge({ "backup_to_bucket" => "mybackup", "delete" => true }))
         config.register
 
-        s3object = double()
-        expect(s3object).to receive(:move_to).with('test-file', :bucket => an_instance_of(AWS::S3::Bucket))
+        s3object = Aws::S3::Object.new('mybucket', 'testkey')
+        expect_any_instance_of(Aws::S3::Object).to receive(:copy_from).with(:copy_source => "mybucket/testkey")
+        expect(s3object).to receive(:delete)
 
-        config.backup_to_bucket(s3object, 'test-file')
+        config.backup_to_bucket(s3object)
       end
 
       it 'should add the specified prefix to the backup file' do
@@ -125,10 +127,11 @@ describe LogStash::Inputs::S3 do
                                                            "backup_add_prefix" => 'backup-' }))
         config.register
 
-        s3object = double()
-        expect(s3object).to receive(:copy_to).with('backup-test-file', :bucket => an_instance_of(AWS::S3::Bucket))
+        s3object = Aws::S3::Object.new('mybucket', 'testkey')
+        expect_any_instance_of(Aws::S3::Object).to receive(:copy_from).with(:copy_source => "mybucket/backup-testkey")
+        expect(s3object).to_not receive(:delete)
 
-        config.backup_to_bucket(s3object, 'test-file')
+        config.backup_to_bucket(s3object)
       end
     end
 
@@ -165,8 +168,8 @@ describe LogStash::Inputs::S3 do
     let(:log) { double(:key => 'uncompressed.log', :last_modified => Time.now - 2 * day) }
 
     before do
-      allow_any_instance_of(AWS::S3::ObjectCollection).to receive(:with_prefix).with(nil) { objects }
-      allow_any_instance_of(AWS::S3::ObjectCollection).to receive(:[]).with(log.key) { log }
+      allow_any_instance_of(Aws::S3::Bucket).to receive(:objects) { objects }
+      allow_any_instance_of(Aws::Resources::Collection).to receive(:[]).with(log.key) { log }
       expect(log).to receive(:read)  { |&block| block.call(File.read(log_file)) }
     end
 

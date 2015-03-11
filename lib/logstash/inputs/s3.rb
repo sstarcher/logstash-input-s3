@@ -84,7 +84,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     unless @backup_to_bucket.nil?
       @backup_bucket = s3.bucket(@backup_to_bucket)
       begin
-        s3.create_bucket(@backup_to_bucket)
+        s3.create_bucket({ :bucket => @backup_to_bucket})
       rescue Aws::S3::Errors::BucketAlreadyExists
       end
     end
@@ -119,10 +119,10 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   end # def fetch_new_files
 
   public
-  def backup_to_bucket(object, key)
+  def backup_to_bucket(object)
     unless @backup_to_bucket.nil?
-      backup_key = "#{@backup_add_prefix}#{key}"
-      @backup_bucket.object(backup_key).copy_from(:copy_source => "#{object.bucket_name}/#{object.key}")
+      backup_key = "#{@backup_add_prefix}#{object.key}"
+      @backup_bucket.object(backup_key).copy_from(:copy_source => "#{object.bucket_name}/#{backup_key}")
       if @delete
         object.delete()
       end
@@ -143,7 +143,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     objects.each do |key|
       @logger.debug("S3 input processing", :bucket => @bucket, :key => key)
 
-      lastmod = @s3bucket.objects[key].last_modified
+      lastmod = @s3bucket.object(key).last_modified
 
       process_log(queue, key)
 
@@ -281,7 +281,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
   private
   def process_log(queue, key)
-    object = @s3bucket.objects[key]
+    object = @s3bucket.object(key)
 
     filename = File.join(temporary_directory, File.basename(key))
 

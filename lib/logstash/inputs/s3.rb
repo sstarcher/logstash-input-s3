@@ -68,10 +68,14 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   # default to the current OS temporary directory in linux /tmp/logstash
   config :temporary_directory, :validate => :string, :default => File.join(Dir.tmpdir, "logstash")
 
+  # Set the number of threads that will work on the internal queue of files found to match your criteria
+  config :worker_count, :validate => :number, :default => 4
+
   public
   def register
     require "digest/md5"
     require "aws-sdk-resources"
+    require "thread"
 
     @region = get_region
 
@@ -105,19 +109,26 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   public
   def list_new_files
     objects = {}
+    work_q = Queue.new
 
     @s3bucket.objects(:prefix => @prefix).each do |log|
       @logger.debug("S3 input: Found key", :key => log.key)
 
       unless ignore_filename?(log.key)
+        # is the file we are looking at newer than the last file we processed on the last run?
         if sincedb.newer?(log.last_modified)
           objects[log.key] = log.last_modified
           @logger.debug("S3 input: Adding to objects[]", :key => log.key)
-          @logger.debug("objects[] length is: ", :length => objects.length)
+          @logger.debug("S3 input: objects[] length is: ", :length => objects.length)
         end
       end
     end
-    return objects.keys.sort {|a,b| objects[a] <=> objects[b]}
+    objects.keys.sort {|a,b| objects[a] <=> objects[b]}
+    objects.each do |key, last_mod|
+        work_q.push(key)
+        @logger.debug("S3 input: Putting object on the queue", :queue_size => work_q.size, :object => key)
+    end
+    return work_q
   end # def fetch_new_files
 
   public
@@ -140,17 +151,24 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
   public
   def process_files(queue)
-    objects = list_new_files
+    work_q = list_new_files
+    workers = (0...@worker_count).map do
+      Thread.new do
+        begin
+          while key = work_q.pop(true)
+            @logger.debug("S3 input processing", :bucket => @bucket, :key => key)
 
-    objects.each do |key|
-      @logger.debug("S3 input processing", :bucket => @bucket, :key => key)
+            lastmod = @s3bucket.object(key).last_modified
 
-      lastmod = @s3bucket.object(key).last_modified
+            process_log(queue, key)
 
-      process_log(queue, key)
-
-      sincedb.write(lastmod)
-    end
+            sincedb.write(lastmod)
+          end
+        rescue ThreadError
+        end
+      end
+    end; "ok"
+    workers.map(&:join); "ok"
   end # def process_files
 
 

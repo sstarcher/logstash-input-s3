@@ -317,6 +317,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     backup_to_dir(filename)
 
     delete_file_from_bucket(object)
+    File.delete(filename)
   end
 
   private

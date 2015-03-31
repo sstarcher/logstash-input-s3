@@ -292,6 +292,8 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   def ignore_filename?(filename)
     if @prefix == filename
       return true
+    elsif filename.end_with?("/")
+      return true
     elsif (@backup_add_prefix && @backup_to_bucket == @bucket && filename =~ /^#{backup_add_prefix}/)
       return true
     elsif @exclude_pattern.nil?

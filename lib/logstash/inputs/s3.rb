@@ -67,11 +67,15 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   # default to the current OS temporary directory in linux /tmp/logstash
   config :temporary_directory, :validate => :string, :default => File.join(Dir.tmpdir, "logstash")
 
+  # Set the number of threads that will work on the internal queue of files found to match your criteria
+  config :worker_count, :validate => :number, :default => 4
+
   public
   def register
     require "fileutils"
     require "digest/md5"
-    require "aws-sdk"
+    require "aws-sdk-resources"
+    require "thread"
 
     @region = get_region
 
@@ -79,12 +83,14 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
     s3 = get_s3object
 
-    @s3bucket = s3.buckets[@bucket]
+    @s3bucket = s3.bucket(@bucket)
 
     unless @backup_to_bucket.nil?
-      @backup_bucket = s3.buckets[@backup_to_bucket]
-      unless @backup_bucket.exists?
-        s3.buckets.create(@backup_to_bucket)
+      @backup_bucket = s3.bucket(@backup_to_bucket)
+      begin
+        s3.client.head_bucket({ :bucket => @backup_to_bucket})
+      rescue Aws::S3::Errors::NoSuchBucket
+        s3.create_bucket({ :bucket => @backup_to_bucket})
       end
     end
 
@@ -106,28 +112,35 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   public
   def list_new_files
     objects = {}
+    work_q = Queue.new
 
-    @s3bucket.objects.with_prefix(@prefix).each do |log|
+    @s3bucket.objects(:prefix => @prefix).each do |log|
       @logger.debug("S3 input: Found key", :key => log.key)
 
       unless ignore_filename?(log.key)
+        # is the file we are looking at newer than the last file we processed on the last run?
         if sincedb.newer?(log.last_modified)
           objects[log.key] = log.last_modified
           @logger.debug("S3 input: Adding to objects[]", :key => log.key)
+          @logger.debug("S3 input: objects[] length is: ", :length => objects.length)
         end
       end
     end
-    return objects.keys.sort {|a,b| objects[a] <=> objects[b]}
+    objects.keys.sort {|a,b| objects[a] <=> objects[b]}
+    objects.each do |key, last_mod|
+        work_q.push(key)
+        @logger.debug("S3 input: Putting object on the queue", :queue_size => work_q.size, :object => key)
+    end
+    return work_q
   end # def fetch_new_files
 
   public
-  def backup_to_bucket(object, key)
+  def backup_to_bucket(object)
     unless @backup_to_bucket.nil?
-      backup_key = "#{@backup_add_prefix}#{key}"
+      backup_key = "#{@backup_add_prefix}#{object.key}"
+      @backup_bucket.object(backup_key).copy_from(:copy_source => "#{object.bucket_name}/#{object.key}")
       if @delete
-        object.move_to(backup_key, :bucket => @backup_bucket)
-      else
-        object.copy_to(backup_key, :bucket => @backup_bucket)
+        object.delete()
       end
     end
   end
@@ -141,16 +154,24 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
   public
   def process_files(queue)
-    objects = list_new_files
+    work_q = list_new_files
+    workers = (0...@worker_count).map do
+      Thread.new do
+        begin
+          while key = work_q.pop(true)
+            @logger.debug("S3 input processing", :bucket => @bucket, :key => key)
 
-    objects.each do |key|
-      if stop?
-        break
-      else
-        @logger.debug("S3 input processing", :bucket => @bucket, :key => key)
-        process_log(queue, key)
+            lastmod = @s3bucket.object(key).last_modified
+
+            process_log(queue, key)
+
+            sincedb.write(lastmod)
+          end
+        rescue ThreadError
+        end
       end
-    end
+    end; "ok"
+    workers.map(&:join); "ok"
   end # def process_files
 
   public
@@ -220,9 +241,12 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
   private
   def event_is_metadata?(event)
-    return false if event["message"].nil?
-    line = event["message"]
-    version_metadata?(line) || fields_metadata?(line)
+    line = event['message']
+    unless line.nil?
+      version_metadata?(line) || fields_metadata?(line)
+    else
+      false
+    end
   end
 
   private
@@ -301,6 +325,8 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   def ignore_filename?(filename)
     if @prefix == filename
       return true
+    elsif filename.end_with?("/")
+      return true
     elsif (@backup_add_prefix && @backup_to_bucket == @bucket && filename =~ /^#{backup_add_prefix}/)
       return true
     elsif @exclude_pattern.nil?
@@ -314,22 +340,18 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
   private
   def process_log(queue, key)
-    object = @s3bucket.objects[key]
+    object = @s3bucket.object(key)
 
     filename = File.join(temporary_directory, File.basename(key))
-    
-    if download_remote_file(object, filename)
-      if process_local_log(queue, filename)
-        backup_to_bucket(object, key)
-        backup_to_dir(filename)
-        delete_file_from_bucket(object)
-        FileUtils.remove_entry_secure(filename, true)
-        lastmod = object.last_modified
-        sincedb.write(lastmod)
-      end
-    else
-      FileUtils.remove_entry_secure(filename, true)
-    end
+    download_remote_file(object, filename)
+
+    process_local_log(queue, filename)
+
+    backup_to_bucket(object)
+    backup_to_dir(filename)
+
+    delete_file_from_bucket(object)
+    File.delete(filename)
   end
 
   private
@@ -339,14 +361,9 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   # @param [String] The Temporary filename to stream to.
   # @return [Boolean] True if the file was completely downloaded
   def download_remote_file(remote_object, local_filename)
-    completed = false
-
     @logger.debug("S3 input: Download remote file", :remote_key => remote_object.key, :local_filename => local_filename)
     File.open(local_filename, 'wb') do |s3file|
-      remote_object.read do |chunk|
-        return completed if stop?
-        s3file.write(chunk)
-      end
+        remote_object.get(:response_target => s3file)
     end
     completed = true
 
@@ -394,7 +411,15 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
       @secret_access_key = @credentials[1]
     end
 
-    s3 = AWS::S3.new(aws_options_hash)
+    if @credentials
+      s3 = Aws::S3::Resource.new(
+        :access_key_id => @access_key_id,
+        :secret_access_key => @secret_access_key,
+        :region => @region
+      )
+    else
+      s3 = Aws::S3::Resource.new(aws_options_hash)
+    end
   end
 
   private

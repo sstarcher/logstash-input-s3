@@ -115,9 +115,8 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     work_q = Queue.new
 
     @s3bucket.objects(:prefix => @prefix).each do |log|
-      @logger.debug("S3 input: Found key", :key => log.key)
-
       unless ignore_filename?(log.key)
+        @logger.debug("S3 input: Found key", :key => log.key)
         # is the file we are looking at newer than the last file we processed on the last run?
         if sincedb.newer?(log.last_modified)
           objects[log.key] = log.last_modified
